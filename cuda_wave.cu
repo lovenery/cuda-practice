@@ -96,25 +96,33 @@ void do_math(int i)
 /**********************************************************************
  *     Update all values along line a specified number of times
  *********************************************************************/
-void update()
+__global__ void update(float *values_d, float *oldval_d, float *newval_d, int nsteps, int tpoints)
 {
-   int i, j;
+   int i;
+   int id = blockIdx.x * blockDim.x + threadIdx.x + 1;
+
+   float dtime, c, dx, tau, sqtau;
+   dtime = 0.3;
+   c = 1.0;
+   dx = 1.0;
+   tau = (c * dtime / dx);
+   sqtau = tau * tau;
 
    /* Update values for each time step */
    for (i = 1; i<= nsteps; i++) {
       /* Update points along line for this time step */
-      for (j = 1; j <= tpoints; j++) {
          /* global endpoints */
-         if ((j == 1) || (j  == tpoints))
-            newval[j] = 0.0;
+      if (id > 0 && id <= tpoints) {
+         if ((id == 1) || (id  == tpoints))
+            newval_d[id] = 0.0;
          else
-            do_math(j);
+            newval_d[id] = (2.0 * values_d[id]) - oldval_d[id] + (sqtau *  (-2.0)*values_d[id]); // do_math()
       }
 
       /* Update old values with new values */
-      for (j = 1; j <= tpoints; j++) {
-         oldval[j] = values[j];
-         values[j] = newval[j];
+      if (id > 0 && id <= tpoints) {
+         oldval_d[id] = values_d[id];
+         values_d[id] = newval_d[id];
       }
    }
 }
@@ -144,7 +152,27 @@ int main(int argc, char *argv[])
 	printf("Initializing points on the line...\n");
 	init_line();
 	printf("Updating all points for all time steps...\n");
-	update();
+
+   float *values_d, *oldval_d, *newval_d;
+   int size = (MAXPOINTS + 2) * sizeof(float);
+   cudaMalloc(&values_d, size);
+   cudaMemcpy(values_d, values, size, cudaMemcpyHostToDevice);
+   cudaMalloc(&oldval_d, size);
+   cudaMemcpy(oldval_d, oldval, size, cudaMemcpyHostToDevice);
+   cudaMalloc(&newval_d, size);
+   cudaMemcpy(newval_d, newval, size, cudaMemcpyHostToDevice);
+
+   int tile = 256;
+   dim3 dimGrid(tile);
+   dim3 dimBlock(tpoints / tile + 1);
+   update <<<dimGrid, dimBlock>>> (values_d, oldval_d, newval_d, nsteps, tpoints);
+   cudaDeviceSynchronize();
+
+   cudaMemcpy(values, values_d, size, cudaMemcpyDeviceToHost);
+   cudaFree(values_d);
+   cudaFree(oldval_d);
+   cudaFree(newval_d);
+
 	printf("Printing final results...\n");
 	printfinal();
 	printf("\nDone.\n\n");
